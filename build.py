@@ -7,7 +7,16 @@ import hashlib
 import zipfile
 from pathlib import Path
 
-FILES = ("__init__.py", "load.py", "model.py", "sync.py", "README.md", "LICENSE")
+FILES = (
+    "__init__.py",
+    "load.py",
+    "model.py",
+    "model_v2.py",
+    "sync.py",
+    "sync_v2.py",
+    "README.md",
+    "LICENSE",
+)
 
 
 def build(source, destination):
