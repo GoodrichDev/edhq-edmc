@@ -1,54 +1,80 @@
 # EDHQ for EDMarketConnector
 
-Opt-in commander sync for [ED Headquarters](https://edhq.io): ranks, credit balance,
-owned ships, and cumulative exploration/exobiology statistics. No Frontier password needed.
+Opt-in commander syncing for [ED Headquarters](https://edhq.io), version **0.2.0**.
+Requires EDMC 6.1.x; no additional packages or administrator rights.
 
 ## Install
 
 1. Download [edhq-edmc.zip](https://edhq.io/downloads/edhq-edmc.zip).
 2. In EDMC, open Settings → Plugins → Open plugins folder. Close EDMC.
-3. Extract there so `edhq/load.py` is directly inside the plugins folder.
-4. Start EDMC. Sign into your [EDHQ account](https://edhq.io/#commanders) and create a sync token.
-5. Log into your commander in the live game. In EDMC Settings → ED Headquarters,
-   paste the token, enable sync, and save.
+3. Extract so the plugins folder contains `edhq/load.py`; restart EDMC.
+4. Create a sync token in your [EDHQ account](https://edhq.io/#commanders).
+5. Log into the live game. In EDMC Settings → ED Headquarters, paste the token,
+   enable sync, and save. Never enter a Frontier password here.
 
-The first sync binds your EDHQ account to that commander's Frontier ID. Use a separate
-EDHQ account/token for each commander. Mismatches pause uploads; accounts never relink
-automatically. Each new commander starts with sync disabled.
+Each commander has separate settings and starts disabled. The first sync binds
+an EDHQ account to that Frontier ID. A different identity pauses uploads;
+accounts never relink automatically. Tokens stay in EDMC's local configuration,
+so protect that file like a password. Revoke tokens on EDHQ to reject uploads.
 
-Your profile and data start private. Choose public sections in your EDHQ account.
-Revoke a token on EDHQ to reject further uploads, or disable sync/delete the token in
-EDMC settings to stop sending. An upload already in flight may finish.
+## Choose what to sync
 
-## Data and troubleshooting
+The existing switch syncs ranks (including reported progress), credit balance,
+basic owned ships, and cumulative exploration/exobiology statistics.
 
-The plugin uses EDMC's documented journal state and live CAPI callbacks. It uploads
-only allowlisted profile fields: no raw journals, friends, locations, cargo, loadouts,
-account passwords, or Frontier access tokens. EDHQ tokens are saved in EDMC's local
-configuration; protect that file like a password. Tokens/private data are never logged.
-Pending snapshots live only in memory.
+Every additional category starts **off**. Select only what you want: assets and
+loans; reputation, engineers, Powerplay and permits; materials/locker/backpack
+and cargo; ship modules/engineering, stored modules and ship locations; suits
+and weapons; carrier status; full numeric statistics; community goals; current
+location; or travel, mission, combat, financial and rank history.
 
-Background uploads coalesce to the latest snapshot, normally at most every 30 seconds,
-and retry temporary failures. Missing fields stay omitted. Statistics use cumulative
-game values; replay does not increment them. Complete CAPI/StoredShips fleets replace
-old records; current-ship updates preserve other ships.
+Location options disclose systems/stations and, when reported, surface
+coordinates. Combat history includes opponent names from your own incidents.
+Statistics, carrier data, loadouts and financial options can contain values or
+balances. Mission/community-goal data can contain destinations. No chat, friend
+lists, raw journals, Frontier credentials or authentication tokens are uploaded.
 
-“Waiting for live commander data and Frontier ID” usually clears after logging into
-the live game. Legacy, beta, CQC and multicrew data do not sync. “Token rejected” means
-create a fresh token. “Commander mismatch” means the token belongs to another commander
-account. Website visibility controls public sections, not the fields synced.
+**Sync selection and public visibility are separate.** New EDHQ sections start
+private; choose what to publish on EDHQ. Assets/loans use the existing Credits
+visibility setting. Turning an option off removes its
+unsent queued records. Already uploaded data remains until deleted on EDHQ.
+An upload already in flight may finish. Disabling all syncing stops new sends.
 
-Version `0.1.0` targets current EDMC 6.1.x callbacks. No additional packages or admin
-rights are required. Source is MIT licensed. HTTPS is required except localhost
-development; redirects are refused to protect tokens.
+## Delivery and coverage
+
+The plugin uses EDMC's journal state and live CAPI callbacks, never scans journal
+files. Missing/unobserved data stays unknown. Detailed ship loadouts become
+available when that ship is used; the plugin cannot reconstruct old loadouts or
+past journeys that were never observed. Cumulative statistics are not incremented
+when journal events replay. Financial history records authoritative balances at
+session boundaries, hourly, or changes of at least 10,000 Cr / 1% of the previous
+recorded balance. It does not infer balances from transaction amounts.
+
+A bounded SQLite outbox under EDMC's application folder (`edhq/outbox.sqlite3`)
+keeps selected, normalized data through restarts. It contains no bearer tokens
+or raw journal entries. Snapshot changes coalesce; history has stable event IDs
+and retries safely. Separate commander, server and token channels never mix.
+The outbox stops accepting new work at 50,000 records / 128 MiB and reports a
+visible status instead of silently discarding history. Restore connectivity if
+it fills. HTTPS is required except localhost; redirects are refused.
+
+Uploads run in a background thread, normally at most every 30 seconds, split
+large collections into bounded requests, and honor rate limits. Older EDHQ
+servers receive the original four categories; additional data waits for a
+compatible server. Legacy, beta, CQC and multicrew sessions do not sync.
+
+The EDMC system/station URL-provider hooks open EDHQ using the configured server.
+Select EDHQ as the provider in EDMC if desired. Links are resolved when clicked.
 
 ## Development
 
-Run `python -m unittest discover -s tests -v` from the standalone repository. Tests use
-synthetic data and never read player journals or transmit profiles.
-`python tests/smoke_edmc.py --edmc-source PATH` tests the official release loader and
-real Tk preferences with isolated config and networking disabled. Build with `python build.py`.
+MIT licensed; runtime uses only Python's standard library and EDMC APIs.
+Run `python -m unittest discover -s tests -v`, `ruff check .`, and
+`ruff format --check .` from the standalone repository. Tests use synthetic data,
+never player journals or real credentials. `python tests/smoke_edmc.py
+--edmc-source PATH` exercises the official EDMC loader and real Tk preferences
+with isolated config and networking disabled. Build with `python build.py`.
 
-The [EDMC registry standards](https://github.com/EDCD/EDMC-Plugin-Registry/blob/main/docs/STANDARDS.md)
-guide SemVer, naming, compatible licensing, API usage, minimal resources and readable
-source. Registry listing and compatibility with future EDMC releases require ongoing review.
+[Registry standards](https://github.com/EDCD/EDMC-Plugin-Registry/blob/main/docs/STANDARDS.md)
+require continued compatibility, least privilege, readable source and ecosystem
+care. Registry listing is separate from publishing this download.

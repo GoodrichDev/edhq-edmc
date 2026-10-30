@@ -89,7 +89,7 @@ def main():
             plugin = plug.Plugin("edhq", target / "load.py", logging.getLogger("edhq-smoke"))
             plug.PLUGINS.append(plugin)
             assert plugin.name == "ED Headquarters"
-            assert plugin.get_version() == "0.1.0"
+            assert plugin.get_version() == "0.2.0"
             main_frame = ttk.Frame(root)
             app = plugin.get_app(main_frame)
             assert isinstance(app, tuple) and len(app) == 2
@@ -99,6 +99,7 @@ def main():
             notebook.add(prefs, text=plugin.name)
             module = plugin.module
             assert module.preferences["enabled"].get() == 0
+            assert all(value.get() == 0 for value, _ in module.preferences["options"].values())
             module.preferences["token"].set("synthetic-fixture-token-A")
             plug.notify_prefs_changed("Fixture Commander", False)
             assert module.settings("Fixture Commander")[2] == "synthetic-fixture-token-A"

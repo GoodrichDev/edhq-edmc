@@ -5,14 +5,17 @@ from __future__ import annotations
 import hashlib
 import tkinter as tk
 import webbrowser
+from pathlib import Path
 from tkinter import ttk
+from urllib.parse import quote
 
 import myNotebook as nb
 from config import config
 
 from . import VERSION as VERSION
-from .model import Collector
-from .sync import SyncWorker, server_url
+from .model_v2 import BASE_SECTIONS, OPTIONS, Collector
+from .sync import server_url
+from .sync_v2 import SyncWorker
 
 PLUGIN_NAME = "ED Headquarters"
 DEFAULT_SERVER = "https://edhq.io"
@@ -23,6 +26,8 @@ last_sent = None
 status_label = None
 status_after = None
 preferences = None
+current_system = None
+current_system_name = None
 
 
 def setting_key(commander, field):
@@ -43,7 +48,11 @@ def settings(commander):
 def plugin_start3(plugin_dir):
     """Start one daemon worker; no file scan or network request on startup."""
     global worker
-    worker = SyncWorker()
+    directory = getattr(config, "app_dir_path", None)
+    # EDMC supplies this directory. The isolated loader test deliberately has
+    # no application directory and must never touch a real user's profile.
+    outbox = Path(directory) / "edhq" / "outbox.sqlite3" if directory else ":memory:"
+    worker = SyncWorker(outbox)
     return PLUGIN_NAME
 
 
@@ -88,6 +97,8 @@ def _activate(commander):
         last_sent = None
         if worker:
             worker.configure()
+        if normalized is None:
+            collector.blocked = True
 
 
 def _queue_snapshot():
@@ -112,18 +123,37 @@ def _queue_snapshot():
     if snapshot == last_sent:
         return
     try:
-        worker.submit(server, token, snapshot)
-        last_sent = snapshot
+        if worker.submit(server, token, snapshot, BASE_SECTIONS | collector.options):
+            last_sent = snapshot
+            collector.acknowledge_history()
     except ValueError:
         worker.set_status("Invalid server URL; check EDHQ settings")
+    except OverflowError:
+        worker.set_status("Outbox full; restore sync before recording more history")
 
 
 def journal_entry(cmdr, is_beta, system, station, entry, state):
     """Use EDMC's state, never read journals or send raw events."""
+    global current_system, current_system_name
+    current_system = state.get("SystemAddress") or system
+    current_system_name = system
     _activate(cmdr)
-    accepted = collector.journal(cmdr, is_beta, entry, state)
+    collector.select(cmdr)
+    enabled = settings(cmdr)[0]
+    collector.configure_options(additional_settings(cmdr) if enabled else set())
+    try:
+        accepted = collector.journal(cmdr, is_beta, entry, state)
+    except OverflowError:
+        if worker:
+            worker.set_status("Outbox full; restore sync before recording more history")
+        return
     if accepted:
         _queue_snapshot()
+        if entry.get("event") == "Shutdown":
+            collector.blocked = True
+            if worker:
+                worker.configure()
+                worker.set_status("Sync paused outside the live commander session")
     elif worker and settings(cmdr)[0]:
         if is_beta or collector.blocked:
             worker.configure()
@@ -145,6 +175,34 @@ def cmdr_data(data, is_beta):
 def cmdr_data_legacy(data, is_beta):
     """Legacy data must never update a live-galaxy commander profile."""
     return None
+
+
+def additional_settings(commander):
+    if not commander:
+        return set()
+    return {name for name in OPTIONS if config.get_int(setting_key(commander, name), default=0)}
+
+
+def system_url(system_name):
+    """EDMC URL-provider hook; navigation happens only when the user clicks."""
+    origin = settings(collector.commander)[1]
+    if current_system and (not system_name or system_name == current_system_name):
+        return origin + "/#systems/" + quote(str(current_system), safe="")
+    return origin + "/#systems?name=" + quote(system_name, safe="") if system_name else ""
+
+
+def station_url(system_name, station_name):
+    """EDHQ shows a system's station list inside the existing system page."""
+    origin = settings(collector.commander)[1]
+    if system_name and station_name:
+        return (
+            origin
+            + "/#systems?name="
+            + quote(system_name, safe="")
+            + "&station_name="
+            + quote(station_name, safe="")
+        )
+    return system_url(system_name)
 
 
 def plugin_prefs(parent, cmdr, is_beta):
@@ -193,6 +251,32 @@ def plugin_prefs(parent, cmdr, is_beta):
         padx=10,
         pady=5,
     )
+    extra = nb.Frame(frame)
+    extra.grid(row=7, column=0, columnspan=2, sticky=tk.EW)
+    extra.grid_remove()
+
+    def toggle_options():
+        if extra.winfo_ismapped():
+            extra.grid_remove()
+        else:
+            extra.grid()
+
+    nb.Button(frame, text="Additional data — all optional", command=toggle_options).grid(
+        row=6, column=0, columnspan=2, sticky=tk.W, padx=10, pady=(10, 3)
+    )
+    nb.Label(
+        extra,
+        text=(
+            "Selected data is sent privately to EDHQ. Publishing is controlled separately on EDHQ."
+        ),
+        wraplength=600,
+    ).grid(row=0, column=0, sticky=tk.W, padx=10, pady=3)
+    preferences["options"] = {}
+    for row, (name, label) in enumerate(OPTIONS.items(), 1):
+        value = tk.IntVar(master=frame, value=0)
+        check = nb.Checkbutton(extra, text=label, variable=value)
+        check.grid(row=row, column=0, sticky=tk.W, padx=10, pady=1)
+        preferences["options"][name] = (value, check)
     prefs_cmdr_changed(cmdr, is_beta)
     return frame
 
@@ -209,6 +293,10 @@ def prefs_cmdr_changed(cmdr, is_beta):
     state = tk.NORMAL if cmdr and not is_beta else tk.DISABLED
     for key in ("check", "server_widget", "token_widget"):
         preferences[key].configure(state=state)
+    selected = additional_settings(cmdr)
+    for name, (value, check) in preferences["options"].items():
+        value.set(int(name in selected))
+        check.configure(state=state)
 
 
 def prefs_changed(cmdr, is_beta):
@@ -231,6 +319,13 @@ def prefs_changed(cmdr, is_beta):
     config.set(setting_key(cmdr, "enabled"), preferences["enabled"].get())
     config.set(setting_key(cmdr, "server"), server)
     config.set(setting_key(cmdr, "token"), token)
+    for name, (value, _) in preferences["options"].items():
+        config.set(setting_key(cmdr, name), value.get())
+    # EDMC can show another commander's preferences while a session is active.
+    # Saving those settings must not change the active commander's consent.
+    collector.configure_options(
+        additional_settings(collector.commander) if settings(collector.commander)[0] else set()
+    )
     if worker:
         worker.configure()
     last_sent = None
